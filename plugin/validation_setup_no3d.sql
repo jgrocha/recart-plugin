@@ -685,7 +685,7 @@ $$ language plpgsql;
 
 CREATE TABLE IF NOT EXISTS validation.area_trabalho_multi AS
 (
-	SELECT st_collect(geometria)::geometry(multipolygon,3763) as geometria
+	SELECT st_multi(st_union(geometria)) as geometria
 	FROM {schema}.area_trabalho
 );
 CREATE INDEX ON validation.area_trabalho_multi USING gist(geometria);
