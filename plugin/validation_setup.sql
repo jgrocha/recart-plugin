@@ -4064,3 +4064,53 @@ $$
 $$
 language sql
 immutable;
+
+CREATE OR REPLACE FUNCTION validation.create_missing_gist_indexes()
+RETURNS INTEGER AS $$
+DECLARE
+    rec record;
+BEGIN
+    FOR rec IN 
+	    with tabelas as (SELECT table_name::regclass, table_name as nome, column_name, data_type, udt_name
+		FROM information_schema.columns 
+		WHERE table_schema = 'public' and udt_name = 'geometry'
+		order by table_name, ordinal_position),
+		todos as (
+		SELECT i.relname as indname,
+		       i.relowner as indowner,
+		       idx.indrelid::regclass as table_name,
+		       am.amname as tipo_indice,
+		       idx.indkey,
+		       ARRAY(
+		       SELECT pg_get_indexdef(idx.indexrelid, k + 1, true)
+		       FROM generate_subscripts(idx.indkey, 1) as k
+		       ORDER BY k
+		       ) as indkey_names,
+		       idx.indexprs IS NOT NULL as indexprs,
+		       idx.indpred IS NOT NULL as indpred
+		FROM   pg_index as idx
+		JOIN   pg_class as i
+		ON     i.oid = idx.indexrelid
+		JOIN   pg_am as am
+		ON     i.relam = am.oid
+		JOIN   pg_namespace as ns
+		ON     ns.oid = i.relnamespace
+		AND    ns.nspname = ANY(current_schemas(false)))
+		select tabelas.nome, tabelas.column_name, todos.indname, todos.tipo_indice
+		from tabelas
+		left join todos
+		on tabelas.table_name = todos.table_name and todos.tipo_indice = 'gist'
+		order by tabelas.nome
+    LOOP
+		IF rec.indname IS NULL and rec.nome <> 'raster_columns' THEN
+			RAISE NOTICE 'NÃO EXISTE para a Tabela % Índice % Tipo %', rec.nome, rec.indname, rec.tipo_indice;
+			RAISE NOTICE 'CREATE INDEX ON %.% USING GIST (%)', 'public', rec.nome, rec.column_name;
+			EXECUTE format( 'CREATE INDEX ON %I.%I USING GIST (%I)', 'public', rec.nome, rec.column_name );
+		ELSE
+			RAISE NOTICE 'Já existe para a Tabela % Índice % Tipo %', rec.nome, rec.indname, rec.tipo_indice;
+		END IF;
+    END LOOP;
+	RETURN 0;
+END;
+$$
+LANGUAGE plpgsql;
