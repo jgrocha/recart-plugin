@@ -987,9 +987,9 @@ class ValidationDialog(QDialog, FORM_CLASS):
         iface.layerTreeView().refreshLayerSymbology(qlayer.id())
 
     def reset(self):
-        res = QMessageBox.question(self,'', "Tem a cereteza que quer remover os esquemas, as tabelas e as funções de validação?", QMessageBox.Yes | QMessageBox.No)
+        res = QMessageBox.question(self,'', "Tem a cereteza que quer remover os esquemas, as tabelas e as funções de validação?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
 
-        if res == QMessageBox.Yes:
+        if res == QMessageBox.StandardButton.Yes:
             self.writeText('[Aviso] Apaga os esquemas validation, errors e remove funções e procedimentos')
 
             # conString = qgis_configs.getConnString(self, self.getConnection())
@@ -1349,7 +1349,10 @@ class ValidateProcess(QThread):
             
             checkProblem = False
             if res and len(res) > 0 and res[0][0] == 1:
-                self.write("\t[Erro] A base de dados não tem as extensões necessárias (\"uuid-ossp\")")
+                self.write("\t[Erro] A base de dados não tem as extensões necessárias (\"uuid-ossp\") para as validações")
+                checkProblem = True
+            elif res and len(res) > 0 and res[0][0] == 3:
+                self.write("\t[Erro] A base de dados não tem as extensões necessárias (\"postgis_raster\") para as validações")
                 checkProblem = True
             elif res and len(res) > 0 and res[0][0] == 2:
                 self.write("\t[Erro] A base de dados tem tabelas com geometrias inválidas")

@@ -186,7 +186,7 @@ $$Todas as entidades representadas através de objetos de geometria linha.$$ );
 -- Em qualquer situação, a existência de geometrias inválidas pode causar problemas
 -- Na criação de redes topológicas, cria problemas com certeza
 --
-delete from validation.rules where code = 'ra_3_1';
+/* delete from validation.rules where code = 'ra_3_1';
 insert into validation.rules ( code, name, rule, scope, entity,  query, report ) 
 values ('ra_3_1', 'Tolerância de conetividade - Curso de água',
 $$Os eixos de futuras redes não devem ter comprimento 0.$$,
@@ -213,9 +213,9 @@ bad as (select count(*) from {schema}.curso_de_agua_eixo a where not st_isvalid(
 select total.count as total, good.count as good, bad.count as bad
 from total, good, bad $$,
 $$select a.* from {schema}.curso_de_agua_eixo a where not st_isvalid(a.geometria) and ST_Intersects(geometria, '%1$s')$$ );
+ */
 
-
-delete from validation.rules where code = 'ra_3_2';
+/* delete from validation.rules where code = 'ra_3_2';
 insert into validation.rules ( code, name, rule, scope, entity,  query, report ) 
 values ('ra_3_2', 'Tolerância de conetividade - Segmento de via rodoviária',
 $$Os eixos de futuras redes não devem ter comprimento 0.$$,
@@ -242,9 +242,9 @@ bad as (select count(*) from {schema}.seg_via_rodov a where not st_isvalid(a.geo
 select total.count as total, good.count as good, bad.count as bad
 from total, good, bad $$,
 $$select a.* from {schema}.seg_via_rodov a where not st_isvalid(a.geometria) and ST_Intersects(geometria, '%1$s')$$ );
+ */
 
-
-delete from validation.rules where code = 'ra_3_3';
+/* delete from validation.rules where code = 'ra_3_3';
 insert into validation.rules ( code, name, rule, scope, entity,  query, report ) 
 values ('ra_3_3', 'Tolerância de conetividade - Segmento de via ferroviária',
 $$Os eixos de futuras redes não devem ter comprimento 0.$$,
@@ -271,7 +271,8 @@ bad as (select count(*) from {schema}.seg_via_ferrea a where not st_isvalid(a.ge
 select total.count as total, good.count as good, bad.count as bad
 from total, good, bad $$,
 $$select a.* from {schema}.seg_via_ferrea a where not st_isvalid(a.geometria) and ST_Intersects(geometria, '%1$s')$$ );
-
+ */
+ 
 -- TODO
 -- Nova redação
 -- delete from validation.rules where code = 'rg_4';
@@ -593,8 +594,8 @@ values ('rg_4_3_2', 'Consistência tridimensional entre Altimetria e Hidrografia
 $$As curva_de_nivel e curso_de_agua_eixo, quando se cruzam, têm que ter o mesmo valor Z. 
 Estas só se devem cruzar quando o curso_de_agua_eixo.valor_posicao_vertical tem valor '0'.$$,
 $$Todos os objetos do Tema "Altimetria" e os objetos tridimensionais (3D) dos Temas "Hidrografia", "Transportes" e "Construções"$$, 'validation.intersecoes_3d',
-$$select * from validation.rg4_3_2_validation (1, '%s'::json)$$,
-$$select * from validation.rg4_3_2_validation (2, '%s'::json)$$ );
+$$select * from validation.rg4_3_2_new_validation (1, '%s'::json)$$,
+$$select * from validation.rg4_3_2_new_validation (2, '%s'::json)$$ );
 
 delete from validation.rules_area where code = 'rg_4_3_2';
 insert into validation.rules_area ( code, name, rule, scope, entity,  query, query_nd2 ) 
@@ -602,12 +603,9 @@ values ('rg_4_3_2', 'Consistência tridimensional entre Altimetria e Hidrografia
 $$As curva_de_nivel e curso_de_agua_eixo, quando se cruzam, têm que ter o mesmo valor Z. 
 Estas só se devem cruzar quando o curso_de_agua_eixo.valor_posicao_vertical tem valor '0'.$$,
 $$Todos os objetos do Tema "Altimetria" e os objetos tridimensionais (3D) dos Temas "Hidrografia", "Transportes" e "Construções"$$, 'validation.intersecoes_3d',
-$$select * from validation.rg4_3_2_validation(1, '%s'::geometry, '%s'::json)$$,
-$$select * from validation.rg4_3_2_validation(2, '%s'::geometry, '%s'::json)$$ );
+$$select * from validation.rg4_3_2_new_validation(1, '%s'::geometry, '%s'::json)$$,
+$$select * from validation.rg4_3_2_new_validation(2, '%s'::geometry, '%s'::json)$$ );
 
---
---
---
 
 delete from validation.rules where code = 'rg_4_3_3';
 insert into validation.rules ( code, name, rule, scope, entity, query, report ) 
@@ -866,8 +864,8 @@ insert into validation.rules_area ( code, name, rule, scope, entity,  query, que
 values ('re3_1_1', 'Continuidade das curvas de nível (Parte 1)', 
 $$A "Curva de nível" é representada por uma linha contínua sem interrupção.$$, 
 $$"Curva de nível".$$, 'curva_de_nivel',
-$$select * from validation.re3_1_1_validation(1, '%s'::json)$$,
-$$select * from validation.re3_1_1_validation(2, '%s'::json)$$ );
+$$select * from validation.re3_1_1_validation(1, '%s'::geometry, '%s'::json)$$,
+$$select * from validation.re3_1_1_validation(2, '%s'::geometry, '%s'::json)$$ );
 
 delete from validation.rules where code = 're3_1_2';
 insert into validation.rules ( code, name, rule, scope, entity,  query, query_nd2 ) 
@@ -896,8 +894,8 @@ $$A equidistância natural entre os objetos "Curva de nível" é:
  - NdD1: 2 m;
  - NdD2: 5 m.$$, 
 $$"Curva de nível".$$,
-$$select * from validation.re3_2_validation (1, '%s'::json)$$,
-$$select * from validation.re3_2_validation (2, '%s'::json)$$ );
+$$select * from validation.re3_2_new_validation(1, '%s'::json)$$,
+$$select * from validation.re3_2_new_validation(2, '%s'::json)$$ );
 
 delete from validation.rules_area where code = 're3_2';
 insert into validation.rules_area ( code, name, rule, scope,  query, query_nd2 ) 
@@ -906,8 +904,8 @@ $$A equidistância natural entre os objetos "Curva de nível" é:
  - NdD1: 2 m;
  - NdD2: 5 m.$$, 
 $$"Curva de nível".$$,
-$$select * from validation.re3_2_validation(1, '%s'::geometry, '%s'::json)$$,
-$$select * from validation.re3_2_validation(2, '%s'::geometry, '%s'::json)$$ );
+$$select * from validation.re3_2_new_validation(1, '%s'::geometry, '%s'::json)$$,
+$$select * from validation.re3_2_new_validation(2, '%s'::geometry, '%s'::json)$$ );
 
 -- Pontos cotados
 delete from validation.rules where code = 're3_3';
