@@ -1434,16 +1434,16 @@ begin
 end;
 $$ language plpgsql;
 
-create or replace function validation.descontinuidades_quadrantes (sect geometry) returns table (p1_id uuid, p2_id uuid, dist_p1_p2 double precision, p1_endpoint_geom geometry) as $$
+create or replace function validation.descontinuidades_quadrantes (entidade text, sect geometry) returns table (p1_id uuid, p2_id uuid, dist_p1_p2 double precision, p1_endpoint_geom geometry) as $$
 begin
 	return query execute format('WITH p AS (
 		SELECT  {schema}.%1$I.identificador AS id, {schema}.st_startpoint(%1$I.geometria) AS geom
 			FROM {schema}.%1$I
-			where ST_Intersects(%1$I.geometria, sect)
+			where ST_Intersects(%1$I.geometria, %L)
 		UNION
 		SELECT  {schema}.%1$I.identificador, {schema}.st_endpoint(%1$I.geometria) AS geom
 			FROM {schema}.%1$I
-			where ST_Intersects(%1$I.geometria, sect)
+			where ST_Intersects(%1$I.geometria, %L)
 	), q AS (
 		SELECT  p.id, p.geom, trunc(ST_X(p.geom)/100)::text || '','' || trunc(ST_Y(p.geom)/100)::text AS quad
 			FROM p
@@ -1453,7 +1453,7 @@ begin
 		FROM (q p1
 			JOIN q p2 ON p1.quad = p2.quad
 			 AND (((st_3ddistance(p1.geom, p2.geom) <> (0)::double precision) AND (st_3ddistance(p1.geom, p2.geom) < (0.2)::double precision)))
-		);', entidade);
+		);', entidade, sect);
 end;
 $$ language plpgsql;
 
@@ -2226,7 +2226,7 @@ begin
 		'confirmacoes as ('
 			'select tabela_1, tabela_2, id_1, id_2, geom_1, geom_2, '
 					'ST_3DIntersects(geom_1, (dp).geom ) as l1_intersection, '
-					'ST_3DIntersects(geom_2, (dp).geom ) as l2_intersection,'
+					'ST_3DIntersects(geom_2, (dp).geom ) as l2_intersection, '
 				'ST_LineInterpolatePoint( geom_1, ST_LineLocatePoint(geom_1, (dp).geom)) as p1_intersecao, '
 				'ST_LineInterpolatePoint( geom_2, ST_LineLocatePoint(geom_2, (dp).geom)) as p2_intersecao, '
 				'(dp).geom as geometria '
@@ -2236,16 +2236,14 @@ begin
 			'abs( st_z( p1_intersecao ) - st_z( p2_intersecao ) ) as delta_z '
 			'from confirmacoes where not l1_intersection and not l2_intersection),'
 		'total as (select count(*) from confirmacoes),'
-		'verygood as (select count(*) from confirmacoes where l1_intersection or l2_intersection),'
 		'good as (select count(*) from verificar where delta_z <= %1$L),'
-		'bad as (select count(*) from verificar where delta_z > %1$L),'
 		'bad_rows AS (        '
 			'INSERT INTO errors.intersecoes_3d_rg_4_3_2 '
-			'select * from verificar where delta_z > %1$L '
+			'select * from verificar where delta_z > %1$L limit 5000'
 			'on conflict do nothing '
 			'RETURNING 1'
 		')'
-		'SELECT bad.count, verygood.count + good.count, total.count FROM bad, verygood, good, total', desvio_3D) into count_bad, count_good, count_all;
+		'SELECT total.count - good.count, good.count, total.count FROM good, total', desvio_3D, sect) into count_bad, count_good, count_all;
 
 	return query select count_all as total, count_good as good, count_bad as bad;
 end;
@@ -2288,7 +2286,7 @@ begin
 		'confirmacoes as ('
 			'select tabela_1, tabela_2, id_1, id_2, geom_1, geom_2, '
 					'ST_3DIntersects(geom_1, (dp).geom ) as l1_intersection, '
-					'ST_3DIntersects(geom_2, (dp).geom ) as l2_intersection,'
+					'ST_3DIntersects(geom_2, (dp).geom ) as l2_intersection, '
 				'ST_LineInterpolatePoint( geom_1, ST_LineLocatePoint(geom_1, (dp).geom)) as p1_intersecao, '
 				'ST_LineInterpolatePoint( geom_2, ST_LineLocatePoint(geom_2, (dp).geom)) as p2_intersecao, '
 				'(dp).geom as geometria '
@@ -2298,21 +2296,161 @@ begin
 			'abs( st_z( p1_intersecao ) - st_z( p2_intersecao ) ) as delta_z '
 			'from confirmacoes where not l1_intersection and not l2_intersection),'
 		'total as (select count(*) from confirmacoes),'
-		'verygood as (select count(*) from confirmacoes where l1_intersection or l2_intersection),'
 		'good as (select count(*) from verificar where delta_z <= %1$L),'
-		'bad as (select count(*) from verificar where delta_z > %1$L),'
 		'bad_rows AS (        '
 			'INSERT INTO errors.intersecoes_3d_rg_4_3_2 '
-			'select * from verificar where delta_z > %1$L '
+			'select * from verificar where delta_z > %1$L limit 5000'
 			'on conflict do nothing '
 			'RETURNING 1'
 		')'
-		'SELECT bad.count, verygood.count + good.count, total.count FROM bad, verygood, good, total', desvio_3D, sect) into count_bad, count_good, count_all;
+		'SELECT total.count - good.count, good.count, total.count FROM good, total', desvio_3D, sect) into count_bad, count_good, count_all;
 
 	return query select count_all as total, count_good as good, count_bad as bad;
 end;
 $$ language plpgsql;
 
+create or replace function validation.rg4_3_2_new_validation (ndd integer, _args json) returns table (total int, good int, bad int) as $$
+declare
+	count_all int := 0;
+	count_good int := 0;
+	count_bad int := 0;
+	res record;
+	desvio_3D numeric;
+begin
+	if ndd=1 then
+		select coalesce(_args->>'desvio_3D', '0.028')::numeric into desvio_3D;
+	else
+		select coalesce(_args->>'desvio_3D', '0.141')::numeric into desvio_3D;
+	end if;
+
+	CREATE SCHEMA IF NOT EXISTS errors;
+	CREATE TABLE IF NOT exists errors.intersecoes_3d_rg_4_3_2 (like validation.intersecoes_3d INCLUDING ALL);
+
+	delete from errors.intersecoes_3d_rg_4_3_2;
+
+	WITH z_values AS (
+	  SELECT
+	    cn.identificador                          AS id_curva_de_nivel,
+	    ca.identificador                          AS id_curso_de_agua,
+	    (ST_Dump(
+	      ST_Intersection(
+	        ST_Force2D(cn.geometria),
+	        ST_Force2D(ca.geometria)
+	      )
+	    )).geom                        AS pt,
+	    cn.geometria                        AS geom_cn,
+	    ca.geometria                        AS geom_ca
+	  FROM {schema}.curva_de_nivel  cn 
+	  JOIN {schema}.curso_de_agua_eixo ca
+	    ON ST_Intersects(ST_Force2D(cn.geometria), ST_Force2D(ca.geometria))
+	    where ca.valor_posicao_vertical = '0' and ca.delimitacao_conhecida and not ca.ficticio -- and cn.identificador = '6e68e2a6-9630-440c-bf5e-979c99038a55'
+	),
+	interpolated AS (
+	  SELECT
+	    id_curva_de_nivel,
+	    id_curso_de_agua,
+	    ST_StartPoint(pt) as pt,
+	    -- ST_Z(ST_LineInterpolatePoint(geom_cn, ST_LineLocatePoint(ST_Force2D(geom_cn), pt))) AS z_curva_de_nivel,
+	    ST_Z(ST_StartPoint(geom_cn)) AS z_curva_de_nivel,
+	    ST_Z(ST_LineInterpolatePoint(geom_ca, ST_LineLocatePoint(ST_Force2D(geom_ca), pt))) AS z_curso_de_agua
+	  FROM z_values
+	  WHERE NOT ST_IsEmpty(pt) -- AND GeometryType(pt) = 'POINT' -- discard LINESTRING intersections
+	),
+	total as (select count(*) as total from interpolated),
+	good as (select count(*) as good from interpolated where z_curva_de_nivel - z_curso_de_agua <= desvio_3D),
+	bad_rows AS (
+		INSERT INTO errors.intersecoes_3d_rg_4_3_2 
+		select id_curva_de_nivel as id_1, id_curso_de_agua as id_2,
+			'curva_de_nivel' as tabela_1, 'curso_de_agua_eixo' as tabela_2, 
+			null as geom_1,
+			null as geom_2,
+	  		ST_Force3D(pt) AS geometria,
+			null as p1_intersecao,
+			null as p2_intersecao,
+			z_curva_de_nivel - z_curso_de_agua  AS delta_z
+		from interpolated where z_curva_de_nivel - z_curso_de_agua > desvio_3D
+		limit 1000
+		on conflict do nothing
+		RETURNING 1
+	)
+	select total.total, good.good, total.total- good.good as bad from total, good into res;
+
+	return query select res.total::int, res.good::int, res.bad::int;
+
+end;
+$$ language plpgsql;
+
+create or replace function validation.rg4_3_2_new_validation (ndd integer, sect geometry, _args json) returns table (total int, good int, bad int) as $$
+declare
+	count_all int := 0;
+	count_good int := 0;
+	count_bad int := 0;
+	res record;
+	desvio_3D numeric;
+begin
+	if ndd=1 then
+		select coalesce(_args->>'desvio_3D', '0.028')::numeric into desvio_3D;
+	else
+		select coalesce(_args->>'desvio_3D', '0.141')::numeric into desvio_3D;
+	end if;
+
+	CREATE SCHEMA IF NOT EXISTS errors;
+	CREATE TABLE IF NOT exists errors.intersecoes_3d_rg_4_3_2 (like validation.intersecoes_3d INCLUDING ALL);
+
+	-- delete from errors.intersecoes_3d_rg_4_3_2;
+
+	WITH z_values AS (
+	  SELECT
+	    cn.identificador                          AS id_curva_de_nivel,
+	    ca.identificador                          AS id_curso_de_agua,
+	    (ST_Dump(
+	      ST_Intersection(
+	        ST_Force2D(cn.geometria),
+	        ST_Force2D(ca.geometria)
+	      )
+	    )).geom                        AS pt,
+	    cn.geometria                        AS geom_cn,
+	    ca.geometria                        AS geom_ca
+	  FROM {schema}.curva_de_nivel  cn 
+	  JOIN {schema}.curso_de_agua_eixo ca
+	    ON ST_Intersects(ST_Force2D(cn.geometria), ST_Force2D(ca.geometria))
+	    where ca.valor_posicao_vertical = '0' and ca.delimitacao_conhecida and not ca.ficticio
+			and ST_Intersects(ca.geometria, sect) and ST_Intersects(ca.geometria, sect) -- and cn.identificador = '6e68e2a6-9630-440c-bf5e-979c99038a55'
+	),
+	interpolated AS (
+	  SELECT
+	    id_curva_de_nivel,
+	    id_curso_de_agua,
+	    ST_StartPoint(pt) as pt,
+	    -- ST_Z(ST_LineInterpolatePoint(geom_cn, ST_LineLocatePoint(ST_Force2D(geom_cn), pt))) AS z_curva_de_nivel,
+	    ST_Z(ST_StartPoint(geom_cn)) AS z_curva_de_nivel,
+	    ST_Z(ST_LineInterpolatePoint(geom_ca, ST_LineLocatePoint(ST_Force2D(geom_ca), pt))) AS z_curso_de_agua
+	  FROM z_values
+	  WHERE NOT ST_IsEmpty(pt) -- AND GeometryType(pt) = 'POINT' -- discard LINESTRING intersections
+	),
+	total as (select count(*) as total from interpolated),
+	good as (select count(*) as good from interpolated where z_curva_de_nivel - z_curso_de_agua <= desvio_3D),
+	bad_rows AS (
+		INSERT INTO errors.intersecoes_3d_rg_4_3_2 
+		select id_curva_de_nivel as id_1, id_curso_de_agua as id_2,
+			'curva_de_nivel' as tabela_1, 'curso_de_agua_eixo' as tabela_2, 
+			null as geom_1,
+			null as geom_2,
+	  		ST_Force3D(pt) AS geometria,
+			null as p1_intersecao,
+			null as p2_intersecao,
+			z_curva_de_nivel - z_curso_de_agua  AS delta_z
+		from interpolated where z_curva_de_nivel - z_curso_de_agua > desvio_3D 
+		limit 1000
+		on conflict do nothing
+		RETURNING 1
+	)
+	select total.total, good.good, total.total- good.good as bad from total, good into res;
+
+	return query select res.total::int, res.good::int, res.bad::int;
+
+end;
+$$ language plpgsql;
 
 create or replace function validation.re4_8_1_validation (ndd integer, _args json) returns table (total int, good int, bad int) as $$
 declare
@@ -2864,6 +3002,356 @@ begin
 end;
 $function$
 ;
+
+create or replace function validation.re3_2_restantes (ndd integer, _args json) returns table (total integer, good integer, bad integer) as $$
+declare
+	count_all integer := 0;
+	count_good integer := 0;
+	count_bad integer := 0;
+
+	valor_equi integer;
+begin
+	if ndd=1 then
+		select coalesce(_args->>'re3_2_ndd1', '2')::int into valor_equi;
+	else
+		select coalesce(_args->>'re3_2_ndd2', '5')::int into valor_equi;
+	end if;
+
+	CREATE SCHEMA IF NOT EXISTS errors;
+
+	CREATE TABLE IF NOT exists errors.curva_de_nivel_re3_2 (like {schema}.curva_de_nivel INCLUDING ALL);
+
+	select count(*) from validation.curva_de_nivel_restantes into count_all;
+
+	with candidates AS (
+    	SELECT identificador, geometria, ST_PointN(geometria, 1) AS first_point
+    		FROM validation.curva_de_nivel_restantes
+	),
+	pares AS (
+        SELECT 
+            all_cdn.identificador,
+            round(abs(st_z(all_cdn.first_point) - st_z(ST_PointN(closest_cdn.geometria, 1)))::numeric, 2) AS z_distance
+        FROM candidates AS all_cdn
+        CROSS JOIN LATERAL (
+            SELECT geometria FROM {schema}.curva_de_nivel AS ports
+            WHERE all_cdn.identificador != ports.identificador
+            ORDER BY all_cdn.first_point <-> ports.geometria
+            LIMIT 1
+        ) AS closest_cdn
+    ),
+    bad_ids AS ( 
+    	SELECT identificador FROM pares WHERE z_distance NOT IN (0, valor_equi)
+    ),
+    bad_rows AS (        
+		INSERT INTO errors.curva_de_nivel_re3_2
+	    SELECT cn.*
+	    FROM validation.curva_de_nivel_restantes cn
+	    WHERE cn.identificador IN (SELECT identificador FROM bad_ids)
+		ON CONFLICT (identificador) DO nothing
+		RETURNING 1
+    )
+	SELECT count(*) FROM bad_rows into count_bad;
+
+	select (count_all - count_bad) into count_good;
+
+	return query select count_all as total, count_good as good, count_bad as bad;
+end;
+$$ language plpgsql;
+
+CREATE OR REPLACE FUNCTION validation.re3_2_new_validation(ndd integer, _args json)
+ RETURNS TABLE(total integer, good integer, bad integer) AS $$
+declare
+	count_all integer := 0;
+	count_good integer := 0;
+	count_bad integer := 0;
+	count_all_restantes integer := 0;
+	count_good_restantes integer := 0;
+	count_bad_restantes integer := 0;
+	valor_equi integer;
+	res record;
+begin
+	if ndd=1 then
+		select coalesce(_args->>'re3_2_ndd1', '2')::int into valor_equi;
+	else
+		select coalesce(_args->>'re3_2_ndd2', '5')::int into valor_equi;
+	end if;
+
+	CREATE SCHEMA IF NOT EXISTS errors;
+	-- CREATE EXTENSION IF NOT EXISTS postgis_raster;
+	CREATE TABLE IF NOT exists errors.curva_de_nivel_re3_2 (like {schema}.curva_de_nivel INCLUDING ALL);
+	-- TRUNCATE errors.curva_de_nivel_re3_2;
+
+	CREATE TABLE IF NOT exists validation.area_trabalho_grid_50 as
+	WITH param as (select 50 as gridsize),
+	area as (
+		select ST_Envelope(geometria) as envelope from {schema}.area_trabalho t
+		),
+	canto as (select ceil(ST_XMin(envelope))::int as minimoX, ceil(ST_YMin(envelope))::int as minimoY, ceil(ST_XMax(envelope))::int as maximoX, ceil(ST_YMax(envelope))::int as maximoY,
+		ceil(ST_XMax(envelope) - ST_XMin(envelope))::int as largura, ceil(ST_YMax(envelope) - ST_YMin(envelope))::int as altura 
+		from area),
+	grid AS (
+	    SELECT (ST_PixelAsPolygons( ST_AddBand(
+	            ST_MakeEmptyRaster(
+	            ceil((maximoX - minimoX) / gridsize)::int,
+	            ceil((maximoY - minimoY) / gridsize)::int,
+	            minimoX, maximoY, gridsize, -1 * gridsize, 0, 0, 3763), '8BUI'), 1)).geom AS geom
+	    from canto, param
+	),
+	lines AS (
+	    SELECT DISTINCT
+	        (ST_DumpSegments(ST_Boundary(geom))).geom AS line
+	    FROM grid
+	),
+	classified AS (
+	    SELECT
+	        line,
+	        abs(ST_YMin(line) - ST_YMax(line)) as delta_horizontal,
+	        abs(ST_XMin(line) - ST_XMax(line)) as delta_vertical,
+	        CASE
+	            WHEN ST_YMin(line) = ST_YMax(line) THEN 'horizontal'
+	            WHEN ST_XMin(line) = ST_XMax(line) THEN 'vertical'
+	        END AS orientation
+	    FROM lines
+	),
+	merged as (
+		SELECT gen_random_uuid() as id, ST_LineMerge(ST_Union(line)) AS line, 'horizontal' AS orientation
+		FROM classified WHERE orientation = 'horizontal'
+		GROUP BY ST_YMin(line)
+		UNION ALL
+		SELECT gen_random_uuid() as id, ST_LineMerge(ST_Union(line)) AS line, 'vertical' AS orientation
+		FROM classified WHERE orientation = 'vertical'
+		GROUP BY ST_XMin(line)),
+	clipped as (
+		select st_intersection(line, geometria) as line, orientation
+		from merged, {schema}.area_trabalho)
+	select gen_random_uuid() as id, (st_dump(line)).geom as line, orientation
+	from clipped;
+	
+	CREATE INDEX IF NOT EXISTS idx_area_trabalho_grid_50_geometria ON validation.area_trabalho_grid_50 USING gist(line);
+
+	CREATE TABLE IF NOT exists validation.area_trabalho_pontos_50 as
+	WITH intersecoes AS (
+	    SELECT
+	        atg.id,
+	        cdn.identificador,
+	        atg.orientation,
+	        ST_Intersection(cdn.geometria, atg.line) AS line
+	    FROM validation.area_trabalho_grid_50 atg
+	    JOIN curva_de_nivel cdn
+	        ON cdn.valor_tipo_curva IN ('1', '2')
+	        AND ST_Intersects(cdn.geometria, atg.line)
+	),
+	geometrias AS (
+	    SELECT
+	        id,
+	        identificador,
+	        orientation,
+	        ST_StartPoint(dumped.geom)            AS geometria,
+	        ST_Z(ST_StartPoint(dumped.geom))      AS z
+	    FROM intersecoes,
+	    LATERAL (SELECT (ST_Dump(line)).geom) AS dumped(geom)
+	)
+	SELECT * FROM geometrias;
+	
+	CREATE INDEX IF NOT EXISTS idx_area_trabalho_pontos_50_geometria ON validation.area_trabalho_pontos_50 USING gist(geometria);
+	CREATE INDEX IF NOT EXISTS idx_area_trabalho_pontos_50_identificador ON validation.area_trabalho_pontos_50(identificador);
+
+	INSERT INTO errors.curva_de_nivel_re3_2
+	with horizontal as (
+		SELECT
+		  identificador,
+		  z,
+		  LAG(z, 1) OVER ( partition by id ORDER BY st_x(geometria)) ponto_anterior,
+		  LEAD(z, 1) OVER ( partition by id ORDER BY st_x(geometria)) ponto_seguinte
+		FROM
+		  validation.area_trabalho_pontos_50 where orientation = 'horizontal'),
+	vertical as (
+		SELECT
+		  identificador,
+		  z,
+		  LAG(z, 1) OVER ( partition by id ORDER BY st_y(geometria)) ponto_anterior,
+		  LEAD(z, 1) OVER ( partition by id ORDER BY st_y(geometria)) ponto_seguinte
+		FROM
+		  validation.area_trabalho_pontos_50 where orientation = 'vertical')	  
+	select cdn.* from horizontal, {schema}.curva_de_nivel cdn
+	where horizontal.identificador = cdn.identificador and not (
+	(abs(z-coalesce(ponto_anterior,z)) = valor_equi or abs(z-coalesce(ponto_anterior,z)) = 0) and (abs(z-coalesce(ponto_seguinte,z)) = valor_equi or abs(z-coalesce(ponto_seguinte,z)) = 0)
+	)
+	union
+	select cdn.* from vertical, {schema}.curva_de_nivel cdn
+	where vertical.identificador = cdn.identificador and not (
+	(abs(z-coalesce(ponto_anterior,z)) = valor_equi or abs(z-coalesce(ponto_anterior,z)) = 0) and (abs(z-coalesce(ponto_seguinte,z)) = valor_equi or abs(z-coalesce(ponto_seguinte,z)) = 0)
+	)
+	ON CONFLICT (identificador) DO nothing;
+
+	select count(*) from {schema}.curva_de_nivel into count_all;
+	select count(*) from errors.curva_de_nivel_re3_2 into count_bad;
+
+	drop table if exists validation.curva_de_nivel_restantes;
+
+	CREATE TABLE IF NOT exists validation.curva_de_nivel_restantes as
+	select * from {schema}.curva_de_nivel cdn
+	where valor_tipo_curva IN ('1', '2') and identificador not in (select identificador from validation.area_trabalho_pontos_50);
+
+	select v.total, v.good, v.bad from validation.re3_2_restantes(ndd, _args) as v into res;
+	raise notice '% % %', res.total, res.good, res.bad;
+
+	select (count_all - count_bad - res.bad) into count_good;
+
+	select (count_bad + res.bad) into count_bad;
+
+	return query select count_all as total, count_good as good, count_bad as bad;
+end;
+$$ language plpgsql;
+
+CREATE OR REPLACE FUNCTION validation.re3_2_new_validation(ndd integer, sect geometry, _args json)
+ RETURNS TABLE(total integer, good integer, bad integer) AS $$
+declare
+	count_all integer := 0;
+	count_good integer := 0;
+	count_bad integer := 0;
+	count_all_restantes integer := 0;
+	count_good_restantes integer := 0;
+	count_bad_restantes integer := 0;
+	valor_equi integer;
+	res record;
+begin
+	if ndd=1 then
+		select coalesce(_args->>'re3_2_ndd1', '2')::int into valor_equi;
+	else
+		select coalesce(_args->>'re3_2_ndd2', '5')::int into valor_equi;
+	end if;
+
+	CREATE SCHEMA IF NOT EXISTS errors;
+	-- CREATE EXTENSION IF NOT EXISTS postgis_raster;
+	CREATE TABLE IF NOT exists errors.curva_de_nivel_re3_2 (like {schema}.curva_de_nivel INCLUDING ALL);
+	-- TRUNCATE errors.curva_de_nivel_re3_2;
+
+	CREATE TABLE IF NOT exists validation.area_trabalho_grid_50 as
+	WITH param as (select 50 as gridsize),
+	area as (
+		select ST_Envelope(sect) as envelope
+		),
+	canto as (select ceil(ST_XMin(envelope))::int as minimoX, ceil(ST_YMin(envelope))::int as minimoY, ceil(ST_XMax(envelope))::int as maximoX, ceil(ST_YMax(envelope))::int as maximoY,
+		ceil(ST_XMax(envelope) - ST_XMin(envelope))::int as largura, ceil(ST_YMax(envelope) - ST_YMin(envelope))::int as altura 
+		from area),
+	grid AS (
+	    SELECT (ST_PixelAsPolygons( ST_AddBand(
+	            ST_MakeEmptyRaster(
+	            ceil((maximoX - minimoX) / gridsize)::int,
+	            ceil((maximoY - minimoY) / gridsize)::int,
+	            minimoX, maximoY, gridsize, -1 * gridsize, 0, 0, 3763), '8BUI'), 1)).geom AS geom
+	    from canto, param
+	),
+	lines AS (
+	    SELECT DISTINCT
+	        (ST_DumpSegments(ST_Boundary(geom))).geom AS line
+	    FROM grid
+	),
+	classified AS (
+	    SELECT
+	        line,
+	        abs(ST_YMin(line) - ST_YMax(line)) as delta_horizontal,
+	        abs(ST_XMin(line) - ST_XMax(line)) as delta_vertical,
+	        CASE
+	            WHEN ST_YMin(line) = ST_YMax(line) THEN 'horizontal'
+	            WHEN ST_XMin(line) = ST_XMax(line) THEN 'vertical'
+	        END AS orientation
+	    FROM lines
+	),
+	merged as (
+		SELECT gen_random_uuid() as id, ST_LineMerge(ST_Union(line)) AS line, 'horizontal' AS orientation
+		FROM classified WHERE orientation = 'horizontal'
+		GROUP BY ST_YMin(line)
+		UNION ALL
+		SELECT gen_random_uuid() as id, ST_LineMerge(ST_Union(line)) AS line, 'vertical' AS orientation
+		FROM classified WHERE orientation = 'vertical'
+		GROUP BY ST_XMin(line)),
+	clipped as (
+		select st_intersection(line, sect) as line, orientation
+		from merged)
+	select gen_random_uuid() as id, (st_dump(line)).geom as line, orientation
+	from clipped;
+	
+	CREATE INDEX IF NOT EXISTS idx_area_trabalho_grid_50_geometria ON validation.area_trabalho_grid_50 USING gist(line);
+
+	CREATE TABLE IF NOT exists validation.area_trabalho_pontos_50 as
+	WITH intersecoes AS (
+	    SELECT
+	        atg.id,
+	        cdn.identificador,
+	        atg.orientation,
+	        ST_Intersection(cdn.geometria, atg.line) AS line
+	    FROM validation.area_trabalho_grid_50 atg
+	    JOIN curva_de_nivel cdn
+	        ON cdn.valor_tipo_curva IN ('1', '2')
+	        AND ST_Intersects(cdn.geometria, atg.line)
+	),
+	geometrias AS (
+	    SELECT
+	        id,
+	        identificador,
+	        orientation,
+	        ST_StartPoint(dumped.geom)            AS geometria,
+	        ST_Z(ST_StartPoint(dumped.geom))      AS z
+	    FROM intersecoes,
+	    LATERAL (SELECT (ST_Dump(line)).geom) AS dumped(geom)
+	)
+	SELECT * FROM geometrias;
+	
+	CREATE INDEX IF NOT EXISTS idx_area_trabalho_pontos_50_geometria ON validation.area_trabalho_pontos_50 USING gist(geometria);
+	CREATE INDEX IF NOT EXISTS idx_area_trabalho_pontos_50_identificador ON validation.area_trabalho_pontos_50(identificador);
+
+	INSERT INTO errors.curva_de_nivel_re3_2
+	with horizontal as (
+		SELECT
+		  identificador,
+		  z,
+		  LAG(z, 1) OVER ( partition by id ORDER BY st_x(geometria)) ponto_anterior,
+		  LEAD(z, 1) OVER ( partition by id ORDER BY st_x(geometria)) ponto_seguinte
+		FROM
+		  validation.area_trabalho_pontos_50 where orientation = 'horizontal'),
+	vertical as (
+		SELECT
+		  identificador,
+		  z,
+		  LAG(z, 1) OVER ( partition by id ORDER BY st_y(geometria)) ponto_anterior,
+		  LEAD(z, 1) OVER ( partition by id ORDER BY st_y(geometria)) ponto_seguinte
+		FROM
+		  validation.area_trabalho_pontos_50 where orientation = 'vertical')	  
+	select cdn.* from horizontal, {schema}.curva_de_nivel cdn
+	where horizontal.identificador = cdn.identificador and not (
+	(abs(z-coalesce(ponto_anterior,z)) = valor_equi or abs(z-coalesce(ponto_anterior,z)) = 0) and (abs(z-coalesce(ponto_seguinte,z)) = valor_equi or abs(z-coalesce(ponto_seguinte,z)) = 0)
+	)
+	union
+	select cdn.* from vertical, {schema}.curva_de_nivel cdn
+	where vertical.identificador = cdn.identificador and not (
+	(abs(z-coalesce(ponto_anterior,z)) = valor_equi or abs(z-coalesce(ponto_anterior,z)) = 0) and (abs(z-coalesce(ponto_seguinte,z)) = valor_equi or abs(z-coalesce(ponto_seguinte,z)) = 0)
+	)
+	ON CONFLICT (identificador) DO nothing;
+
+	select count(*) from {schema}.curva_de_nivel into count_all;
+	select count(*) from errors.curva_de_nivel_re3_2 into count_bad;
+
+	drop table if exists validation.curva_de_nivel_restantes;
+
+	CREATE TABLE IF NOT exists validation.curva_de_nivel_restantes as
+	select cdn.* from {schema}.curva_de_nivel cdn
+	where cdn.valor_tipo_curva IN ('1', '2') 
+		and st_intersects(cdn.geometria, sect) 
+		and cdn.identificador not in (select identificador from validation.area_trabalho_pontos_50);
+
+	select v.total, v.good, v.bad from validation.re3_2_restantes(ndd, _args) as v into res;
+	raise notice '% % %', res.total, res.good, res.bad;
+
+	select (count_all - count_bad - res.bad) into count_good;
+
+	select (count_bad + res.bad) into count_bad;
+
+	return query select count_all as total, count_good as good, count_bad as bad;
+end;
+$$ language plpgsql;
+
 
 -- select * from validation.re4_10_validation ();
 create or replace function validation.re4_10_validation () returns table (total int, good int, bad int) as $$
@@ -3427,6 +3915,7 @@ RETURNS INTEGER AS $$
 DECLARE
     tbl TEXT;
     uuid_ossp_available BOOLEAN;
+    postgis_raster_available BOOLEAN;
     invalid_found BOOLEAN := FALSE;
     row_invalid_count BIGINT;
 BEGIN
@@ -3437,6 +3926,15 @@ BEGIN
     IF NOT uuid_ossp_available THEN
         RAISE WARNING 'Extension uuid-ossp is not installed.';
         RETURN 1;
+    END IF;
+
+    SELECT EXISTS(
+        SELECT 1 FROM pg_extension WHERE extname = 'postgis_raster'
+    ) INTO postgis_raster_available;
+    
+    IF NOT postgis_raster_available THEN
+        RAISE WARNING 'Extension postgis_raster_available is not installed.';
+        RETURN 3;
     END IF;
 
     FOR tbl IN 
