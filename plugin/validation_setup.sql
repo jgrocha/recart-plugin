@@ -2188,19 +2188,21 @@ begin
 end;
 $$ language plpgsql;
 
-
 create or replace function validation.rg4_3_2_validation (ndd integer, _args json) returns table (total int, good int, bad int) as $$
 declare
-	count_all integer := 0;
-	count_good integer := 0;
-	count_bad integer := 0;
-
+	count_all int := 0;
+	count_good int := 0;
+	count_bad int := 0;
+	res record;
 	desvio_3D numeric;
+	tolerancia numeric := 0.15;
 begin
 	if ndd=1 then
 		select coalesce(_args->>'desvio_3D', '0.028')::numeric into desvio_3D;
+		tolerancia = 0.018;
 	else
 		select coalesce(_args->>'desvio_3D', '0.141')::numeric into desvio_3D;
+		tolerancia = 0.075;
 	end if;
 
 	CREATE SCHEMA IF NOT EXISTS errors;
@@ -2208,59 +2210,62 @@ begin
 
 	delete from errors.intersecoes_3d_rg_4_3_2;
 
-	execute format(
-		'with linhas1 as ('
-			'select identificador, geometria, ''curva_de_nivel'' as tabela from {schema}.curva_de_nivel '
-		'),'
-		'linhas2 as ('
-			'select identificador, geometria, ''curso_de_agua_eixo'' as tabela from {schema}.curso_de_agua_eixo where valor_posicao_vertical = ''0'' and delimitacao_conhecida and not ficticio '
-		'),'
-		'allintersections as ('
-			'SELECT linhas1.tabela as tabela_1, linhas2.tabela as tabela_2, '
-				'linhas1.identificador as id_1, linhas1.geometria as geom_1, '
-				'linhas2.identificador as id_2, linhas2.geometria as geom_2, '
-				'ST_DumpPoints( ST_Intersection(linhas1.geometria, linhas2.geometria) ) as dp '
-			'FROM linhas1, linhas2 '
-			'where ST_Intersects(linhas1.geometria, linhas2.geometria) '
-		'),'
-		'confirmacoes as ('
-			'select tabela_1, tabela_2, id_1, id_2, geom_1, geom_2, '
-					'ST_3DIntersects(geom_1, (dp).geom ) as l1_intersection, '
-					'ST_3DIntersects(geom_2, (dp).geom ) as l2_intersection, '
-				'ST_LineInterpolatePoint( geom_1, ST_LineLocatePoint(geom_1, (dp).geom)) as p1_intersecao, '
-				'ST_LineInterpolatePoint( geom_2, ST_LineLocatePoint(geom_2, (dp).geom)) as p2_intersecao, '
-				'(dp).geom as geometria '
-			'from allintersections'
-		'),'
-		'verificar as (select id_1, id_2, tabela_1, tabela_2, geom_1, geom_2, geometria, p1_intersecao, p2_intersecao, '
-			'abs( st_z( p1_intersecao ) - st_z( p2_intersecao ) ) as delta_z '
-			'from confirmacoes where not l1_intersection and not l2_intersection),'
-		'total as (select count(*) from confirmacoes),'
-		'good as (select count(*) from verificar where delta_z <= %1$L),'
-		'bad_rows AS (        '
-			'INSERT INTO errors.intersecoes_3d_rg_4_3_2 '
-			'select * from verificar where delta_z > %1$L limit 5000'
-			'on conflict do nothing '
-			'RETURNING 1'
-		')'
-		'SELECT total.count - good.count, good.count, total.count FROM good, total', desvio_3D, sect) into count_bad, count_good, count_all;
+	CALL validation.create_curva_de_nivel_segmento(tolerancia, 256);
 
-	return query select count_all as total, count_good as good, count_bad as bad;
+	WITH z_values AS (
+		SELECT
+			cn.identificador AS id_curva_de_nivel,
+			ca.identificador AS id_curso_de_agua,
+			ST_StartPoint(pt.geom) AS pt,
+			cn.z_curva AS z_curva_de_nivel,
+			ST_Z(ST_LineInterpolatePoint(
+					ca.geometria,
+					ST_LineLocatePoint(ST_Force2D(ca.geometria), ST_StartPoint(pt.geom))
+				)) AS z_curso_de_agua
+		FROM validation.curva_de_nivel_segmento cn
+		JOIN {schema}.curso_de_agua_eixo ca
+			ON ST_Intersects(cn.geom2d, ST_Force2D(ca.geometria))
+		AND ca.valor_posicao_vertical = '0'	AND ca.delimitacao_conhecida AND NOT ca.ficticio
+		CROSS JOIN LATERAL ST_Dump(ST_Intersection(cn.geom2d, ST_Force2D(ca.geometria))) AS pt
+		WHERE NOT ST_IsEmpty(pt.geom)
+	),
+	bad_rows AS (
+			INSERT INTO errors.intersecoes_3d_rg_4_3_2 
+			select id_curva_de_nivel as id_1, id_curso_de_agua as id_2,
+				'curva_de_nivel' as tabela_1, 'curso_de_agua_eixo' as tabela_2, 
+				null as geom_1,
+				null as geom_2,
+				ST_Force3D(pt) AS geometria,
+				null as p1_intersecao,
+				null as p2_intersecao,
+				abs(z_curva_de_nivel - z_curso_de_agua) AS delta_z,
+				'rg_4_3_2' as regra
+			from z_values where abs(z_curva_de_nivel - z_curso_de_agua) > desvio_3D	limit 100
+			on conflict do nothing
+			RETURNING 1
+		)
+	select -1 as total, -1 as good, count(*) as bad 
+	from bad_rows into res;
+
+	return query select res.total::int, res.good::int, res.bad::int;
 end;
 $$ language plpgsql;
 
 create or replace function validation.rg4_3_2_validation (ndd integer, sect geometry, _args json) returns table (total int, good int, bad int) as $$
 declare
-	count_all integer := 0;
-	count_good integer := 0;
-	count_bad integer := 0;
-
+	count_all int := 0;
+	count_good int := 0;
+	count_bad int := 0;
+	res record;
 	desvio_3D numeric;
+	tolerancia numeric := 0.15;
 begin
 	if ndd=1 then
 		select coalesce(_args->>'desvio_3D', '0.028')::numeric into desvio_3D;
+		tolerancia = 0.018;
 	else
 		select coalesce(_args->>'desvio_3D', '0.141')::numeric into desvio_3D;
+		tolerancia = 0.075;
 	end if;
 
 	CREATE SCHEMA IF NOT EXISTS errors;
@@ -2268,187 +2273,45 @@ begin
 
 	delete from errors.intersecoes_3d_rg_4_3_2;
 
-	execute format(
-		'with linhas1 as ('
-			'select identificador, geometria, ''curva_de_nivel'' as tabela from {schema}.curva_de_nivel where ST_Intersects(geometria, %2$L) '
-		'),'
-		'linhas2 as ('
-			'select identificador, geometria, ''curso_de_agua_eixo'' as tabela from {schema}.curso_de_agua_eixo where ST_Intersects(geometria, %2$L) and valor_posicao_vertical = ''0'' and delimitacao_conhecida and not ficticio '
-		'),'
-		'allintersections as ('
-			'SELECT linhas1.tabela as tabela_1, linhas2.tabela as tabela_2, '
-				'linhas1.identificador as id_1, linhas1.geometria as geom_1, '
-				'linhas2.identificador as id_2, linhas2.geometria as geom_2, '
-				'ST_DumpPoints( ST_Intersection(linhas1.geometria, linhas2.geometria) ) as dp '
-			'FROM linhas1, linhas2 '
-			'where ST_Intersects(linhas1.geometria, linhas2.geometria) '
-		'),'
-		'confirmacoes as ('
-			'select tabela_1, tabela_2, id_1, id_2, geom_1, geom_2, '
-					'ST_3DIntersects(geom_1, (dp).geom ) as l1_intersection, '
-					'ST_3DIntersects(geom_2, (dp).geom ) as l2_intersection, '
-				'ST_LineInterpolatePoint( geom_1, ST_LineLocatePoint(geom_1, (dp).geom)) as p1_intersecao, '
-				'ST_LineInterpolatePoint( geom_2, ST_LineLocatePoint(geom_2, (dp).geom)) as p2_intersecao, '
-				'(dp).geom as geometria '
-			'from allintersections'
-		'),'
-		'verificar as (select id_1, id_2, tabela_1, tabela_2, geom_1, geom_2, geometria, p1_intersecao, p2_intersecao, '
-			'abs( st_z( p1_intersecao ) - st_z( p2_intersecao ) ) as delta_z '
-			'from confirmacoes where not l1_intersection and not l2_intersection),'
-		'total as (select count(*) from confirmacoes),'
-		'good as (select count(*) from verificar where delta_z <= %1$L),'
-		'bad_rows AS (        '
-			'INSERT INTO errors.intersecoes_3d_rg_4_3_2 '
-			'select * from verificar where delta_z > %1$L limit 5000'
-			'on conflict do nothing '
-			'RETURNING 1'
-		')'
-		'SELECT total.count - good.count, good.count, total.count FROM good, total', desvio_3D, sect) into count_bad, count_good, count_all;
-
-	return query select count_all as total, count_good as good, count_bad as bad;
-end;
-$$ language plpgsql;
-
-create or replace function validation.rg4_3_2_new_validation (ndd integer, _args json) returns table (total int, good int, bad int) as $$
-declare
-	count_all int := 0;
-	count_good int := 0;
-	count_bad int := 0;
-	res record;
-	desvio_3D numeric;
-begin
-	if ndd=1 then
-		select coalesce(_args->>'desvio_3D', '0.028')::numeric into desvio_3D;
-	else
-		select coalesce(_args->>'desvio_3D', '0.141')::numeric into desvio_3D;
-	end if;
-
-	CREATE SCHEMA IF NOT EXISTS errors;
-	CREATE TABLE IF NOT exists errors.intersecoes_3d_rg_4_3_2 (like validation.intersecoes_3d INCLUDING ALL);
-
-	delete from errors.intersecoes_3d_rg_4_3_2;
+	CALL validation.create_curva_de_nivel_segmento(tolerancia, 256);
 
 	WITH z_values AS (
-	  SELECT
-	    cn.identificador                          AS id_curva_de_nivel,
-	    ca.identificador                          AS id_curso_de_agua,
-	    (ST_Dump(
-	      ST_Intersection(
-	        ST_Force2D(cn.geometria),
-	        ST_Force2D(ca.geometria)
-	      )
-	    )).geom                        AS pt,
-	    cn.geometria                        AS geom_cn,
-	    ca.geometria                        AS geom_ca
-	  FROM {schema}.curva_de_nivel  cn 
-	  JOIN {schema}.curso_de_agua_eixo ca
-	    ON ST_Intersects(ST_Force2D(cn.geometria), ST_Force2D(ca.geometria))
-	    where ca.valor_posicao_vertical = '0' and ca.delimitacao_conhecida and not ca.ficticio -- and cn.identificador = '6e68e2a6-9630-440c-bf5e-979c99038a55'
+		SELECT
+			cn.identificador AS id_curva_de_nivel,
+			ca.identificador AS id_curso_de_agua,
+			ST_StartPoint(pt.geom) AS pt,
+			cn.z_curva AS z_curva_de_nivel,
+			ST_Z(ST_LineInterpolatePoint(
+					ca.geometria,
+					ST_LineLocatePoint(ST_Force2D(ca.geometria), ST_StartPoint(pt.geom))
+				)) AS z_curso_de_agua
+		FROM validation.curva_de_nivel_segmento cn
+		JOIN {schema}.curso_de_agua_eixo ca
+			ON ST_Intersects(cn.geom2d, ST_Force2D(ca.geometria))
+		AND ca.valor_posicao_vertical = '0'	AND ca.delimitacao_conhecida AND NOT ca.ficticio
+		CROSS JOIN LATERAL ST_Dump(ST_Intersection(cn.geom2d, ST_Force2D(ca.geometria))) AS pt
+		WHERE NOT ST_IsEmpty(pt.geom) 
+			and ST_Intersects(ca.geometria, sect)
 	),
-	interpolated AS (
-	  SELECT
-	    id_curva_de_nivel,
-	    id_curso_de_agua,
-	    ST_StartPoint(pt) as pt,
-	    -- ST_Z(ST_LineInterpolatePoint(geom_cn, ST_LineLocatePoint(ST_Force2D(geom_cn), pt))) AS z_curva_de_nivel,
-	    ST_Z(ST_StartPoint(geom_cn)) AS z_curva_de_nivel,
-	    ST_Z(ST_LineInterpolatePoint(geom_ca, ST_LineLocatePoint(ST_Force2D(geom_ca), pt))) AS z_curso_de_agua
-	  FROM z_values
-	  WHERE NOT ST_IsEmpty(pt) -- AND GeometryType(pt) = 'POINT' -- discard LINESTRING intersections
-	),
-	total as (select count(*) as total from interpolated),
-	good as (select count(*) as good from interpolated where z_curva_de_nivel - z_curso_de_agua <= desvio_3D),
 	bad_rows AS (
-		INSERT INTO errors.intersecoes_3d_rg_4_3_2 
-		select id_curva_de_nivel as id_1, id_curso_de_agua as id_2,
-			'curva_de_nivel' as tabela_1, 'curso_de_agua_eixo' as tabela_2, 
-			null as geom_1,
-			null as geom_2,
-	  		ST_Force3D(pt) AS geometria,
-			null as p1_intersecao,
-			null as p2_intersecao,
-			z_curva_de_nivel - z_curso_de_agua  AS delta_z
-		from interpolated where z_curva_de_nivel - z_curso_de_agua > desvio_3D
-		limit 1000
-		on conflict do nothing
-		RETURNING 1
-	)
-	select total.total, good.good, total.total- good.good as bad from total, good into res;
+			INSERT INTO errors.intersecoes_3d_rg_4_3_2 
+			select id_curva_de_nivel as id_1, id_curso_de_agua as id_2,
+				'curva_de_nivel' as tabela_1, 'curso_de_agua_eixo' as tabela_2, 
+				null as geom_1,
+				null as geom_2,
+				ST_Force3D(pt) AS geometria,
+				null as p1_intersecao,
+				null as p2_intersecao,
+				abs(z_curva_de_nivel - z_curso_de_agua) AS delta_z,
+				'rg_4_3_2' as regra
+			from z_values where abs(z_curva_de_nivel - z_curso_de_agua) > desvio_3D	limit 100
+			on conflict do nothing
+			RETURNING 1
+		)
+	select -1 as total, -1 as good, count(*) as bad 
+	from bad_rows into res;
 
 	return query select res.total::int, res.good::int, res.bad::int;
-
-end;
-$$ language plpgsql;
-
-create or replace function validation.rg4_3_2_new_validation (ndd integer, sect geometry, _args json) returns table (total int, good int, bad int) as $$
-declare
-	count_all int := 0;
-	count_good int := 0;
-	count_bad int := 0;
-	res record;
-	desvio_3D numeric;
-begin
-	if ndd=1 then
-		select coalesce(_args->>'desvio_3D', '0.028')::numeric into desvio_3D;
-	else
-		select coalesce(_args->>'desvio_3D', '0.141')::numeric into desvio_3D;
-	end if;
-
-	CREATE SCHEMA IF NOT EXISTS errors;
-	CREATE TABLE IF NOT exists errors.intersecoes_3d_rg_4_3_2 (like validation.intersecoes_3d INCLUDING ALL);
-
-	-- delete from errors.intersecoes_3d_rg_4_3_2;
-
-	WITH z_values AS (
-	  SELECT
-	    cn.identificador                          AS id_curva_de_nivel,
-	    ca.identificador                          AS id_curso_de_agua,
-	    (ST_Dump(
-	      ST_Intersection(
-	        ST_Force2D(cn.geometria),
-	        ST_Force2D(ca.geometria)
-	      )
-	    )).geom                        AS pt,
-	    cn.geometria                        AS geom_cn,
-	    ca.geometria                        AS geom_ca
-	  FROM {schema}.curva_de_nivel  cn 
-	  JOIN {schema}.curso_de_agua_eixo ca
-	    ON ST_Intersects(ST_Force2D(cn.geometria), ST_Force2D(ca.geometria))
-	    where ca.valor_posicao_vertical = '0' and ca.delimitacao_conhecida and not ca.ficticio
-			and ST_Intersects(ca.geometria, sect) and ST_Intersects(ca.geometria, sect) -- and cn.identificador = '6e68e2a6-9630-440c-bf5e-979c99038a55'
-	),
-	interpolated AS (
-	  SELECT
-	    id_curva_de_nivel,
-	    id_curso_de_agua,
-	    ST_StartPoint(pt) as pt,
-	    -- ST_Z(ST_LineInterpolatePoint(geom_cn, ST_LineLocatePoint(ST_Force2D(geom_cn), pt))) AS z_curva_de_nivel,
-	    ST_Z(ST_StartPoint(geom_cn)) AS z_curva_de_nivel,
-	    ST_Z(ST_LineInterpolatePoint(geom_ca, ST_LineLocatePoint(ST_Force2D(geom_ca), pt))) AS z_curso_de_agua
-	  FROM z_values
-	  WHERE NOT ST_IsEmpty(pt) -- AND GeometryType(pt) = 'POINT' -- discard LINESTRING intersections
-	),
-	total as (select count(*) as total from interpolated),
-	good as (select count(*) as good from interpolated where z_curva_de_nivel - z_curso_de_agua <= desvio_3D),
-	bad_rows AS (
-		INSERT INTO errors.intersecoes_3d_rg_4_3_2 
-		select id_curva_de_nivel as id_1, id_curso_de_agua as id_2,
-			'curva_de_nivel' as tabela_1, 'curso_de_agua_eixo' as tabela_2, 
-			null as geom_1,
-			null as geom_2,
-	  		ST_Force3D(pt) AS geometria,
-			null as p1_intersecao,
-			null as p2_intersecao,
-			z_curva_de_nivel - z_curso_de_agua  AS delta_z
-		from interpolated where z_curva_de_nivel - z_curso_de_agua > desvio_3D 
-		limit 1000
-		on conflict do nothing
-		RETURNING 1
-	)
-	select total.total, good.good, total.total- good.good as bad from total, good into res;
-
-	return query select res.total::int, res.good::int, res.bad::int;
-
 end;
 $$ language plpgsql;
 
@@ -3654,6 +3517,49 @@ end;
 $$ language plpgsql;
 
 select validation.create_tin();
+
+CREATE OR REPLACE PROCEDURE validation.create_curva_de_nivel_segmento(
+    tolerancia    double precision,
+    max_vertices  integer DEFAULT 256
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    ultimo_id uuid := '00000000-0000-0000-0000-000000000000';
+    ids_lote  int;
+    max_id    uuid;
+    feitas    int := 0;
+BEGIN
+    IF tolerancia <= 0 OR tolerancia > 5 THEN
+        RAISE EXCEPTION 'Tolerância % fora do intervalo razoável (0, 5] m', tolerancia;
+    END IF;
+    IF max_vertices < 128 THEN
+        RAISE EXCEPTION 'max_vertices % é demasiado baixo; o mínimo é 128', max_vertices;
+    END IF;
+
+    IF (SELECT count(*) FROM information_schema.tables
+        WHERE table_schema = 'validation' AND table_name = 'curva_de_nivel_segmento') > 0 THEN
+        RAISE NOTICE 'A tabela já existe. Nada a fazer.';
+        RETURN;
+    END IF;
+
+    CREATE UNLOGGED TABLE validation.curva_de_nivel_segmento (
+        identificador uuid,
+        z_curva       double precision,
+        geom2d        geometry
+    );
+
+	INSERT INTO validation.curva_de_nivel_segmento (identificador, z_curva, geom2d)
+	SELECT cn.identificador,
+	       ST_Z(ST_StartPoint(cn.geometria)),
+	       ST_Subdivide(ST_SimplifyPreserveTopology(ST_Force2D(cn.geometria), tolerancia), max_vertices)
+	FROM {schema}.curva_de_nivel cn;
+
+    CREATE INDEX idx_curva_de_nivel_segmento
+        ON validation.curva_de_nivel_segmento USING GIST (geom2d);
+    ANALYZE validation.curva_de_nivel_segmento;
+END;
+$$;
 
 -- Criar área de trabalho multi-polígono para casos com múltiplas áreas de trabalho no mesmo projecto
 CREATE TABLE IF NOT EXISTS validation.area_trabalho_multi AS

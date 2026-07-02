@@ -594,8 +594,8 @@ values ('rg_4_3_2', 'Consistência tridimensional entre Altimetria e Hidrografia
 $$As curva_de_nivel e curso_de_agua_eixo, quando se cruzam, têm que ter o mesmo valor Z. 
 Estas só se devem cruzar quando o curso_de_agua_eixo.valor_posicao_vertical tem valor '0'.$$,
 $$Todos os objetos do Tema "Altimetria" e os objetos tridimensionais (3D) dos Temas "Hidrografia", "Transportes" e "Construções"$$, 'validation.intersecoes_3d',
-$$select * from validation.rg4_3_2_new_validation (1, '%s'::json)$$,
-$$select * from validation.rg4_3_2_new_validation (2, '%s'::json)$$ );
+$$select * from validation.rg4_3_2_validation (1, '%s'::json)$$,
+$$select * from validation.rg4_3_2_validation (2, '%s'::json)$$ );
 
 delete from validation.rules_area where code = 'rg_4_3_2';
 insert into validation.rules_area ( code, name, rule, scope, entity,  query, query_nd2 ) 
@@ -603,8 +603,8 @@ values ('rg_4_3_2', 'Consistência tridimensional entre Altimetria e Hidrografia
 $$As curva_de_nivel e curso_de_agua_eixo, quando se cruzam, têm que ter o mesmo valor Z. 
 Estas só se devem cruzar quando o curso_de_agua_eixo.valor_posicao_vertical tem valor '0'.$$,
 $$Todos os objetos do Tema "Altimetria" e os objetos tridimensionais (3D) dos Temas "Hidrografia", "Transportes" e "Construções"$$, 'validation.intersecoes_3d',
-$$select * from validation.rg4_3_2_new_validation(1, '%s'::geometry, '%s'::json)$$,
-$$select * from validation.rg4_3_2_new_validation(2, '%s'::geometry, '%s'::json)$$ );
+$$select * from validation.rg4_3_2_validation(1, '%s'::geometry, '%s'::json)$$,
+$$select * from validation.rg4_3_2_validation(2, '%s'::geometry, '%s'::json)$$ );
 
 
 delete from validation.rules where code = 'rg_4_3_3';
