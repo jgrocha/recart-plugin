@@ -1,14 +1,7 @@
 #!/usr/bin/bash
-
-if [ -z "${1:-}" ]; then
-    echo "Erro: falta o nome do serviço PG." >&2
-    echo "Uso: $0 <pg_service>" >&2
-    exit 1
-fi
-
-service="$1"
+ 
 schema="public"
-
+ 
 version="v2.0.2"
 ndd1=false
 args='{
@@ -23,7 +16,7 @@ args='{
     "re7_8_ndd1": 100,
     "re7_8_ndd2": 1000,
     "desvio_3D": '
-
+ 
 if $ndd1; then
     args="${args}0.028
 }"
@@ -31,15 +24,15 @@ else
     args="${args}0.141
 }"
 fi
-
+ 
 file_rules="../plugin/validation_rules.sql"
 file_setup="../plugin/validation_setup.sql"
 file_reset="../plugin/validation_reset.sql"
-
+ 
 reset=false
 skip=false
-
-
+ 
+ 
 # parse bash script arguments, multiple flags allowed (-r to reset, -s to skip rules if total > 0)
 while getopts "rs" opt; do
     case "$opt" in
@@ -47,7 +40,16 @@ while getopts "rs" opt; do
         s) skip=true ;;
     esac
 done
-
+shift $((OPTIND - 1))
+ 
+if [ -z "${1:-}" ]; then
+    echo "Erro: falta o nome do serviço PG." >&2
+    echo "Uso: $0 [-r] [-s] <pg_service>" >&2
+    exit 1
+fi
+ 
+service="$1"
+ 
 if $reset; then
     echo "Resetting validation and errors schema"
     psql service=$service -f $file_reset
@@ -65,6 +67,10 @@ sed "s/{schema}/$schema/g" $file_setup > $file_setup.tmp
 psql service=$service -f $file_setup.tmp
 rm $file_setup.tmp
 echo "Validation setup applied"
+
+psql service=$service -c "select validation.create_missing_gist_indexes()"
+
+psql service=$service -c "VACUUM (VERBOSE, ANALYZE);"
 
 # get rows in validation.rules for version and call do_validation for each row
 rows=$(psql service=$service -t -A -F '|' -c "SELECT code, total FROM validation.rules WHERE '$version' = any(versoes) order by dorder;")
