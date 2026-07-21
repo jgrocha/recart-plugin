@@ -69,6 +69,7 @@ class ValidationDialog(QDialog, FORM_CLASS):
 
         self.structure_errors = []
         self.value_list_errors = []
+        self.constraint_errors = []
 
         self.pgutils = None
         self.ruleSetup = False
@@ -552,6 +553,41 @@ class ValidationDialog(QDialog, FORM_CLASS):
 
         return tabOff + 220
 
+    def addErros3dReportSection(self, layout, pages, footnote, tabOff, ereport):
+        npage = QgsLayoutItemPage(layout)
+        npage.setPageSize('A4', QgsLayoutItemPage.Landscape)
+        pages.addPage(npage)
+
+        section = QgsLayoutItemLabel(layout)
+        section.setText('Erros 3D')
+        section.setFont(QFont('Arial', 14, 75))
+        section.adjustSizeToText()
+        section.attemptMove(QgsLayoutPoint(8, 35 + tabOff))
+        layout.addItem(section)
+
+        cols = [QgsLayoutTableColumn(), QgsLayoutTableColumn(),
+                QgsLayoutTableColumn(), QgsLayoutTableColumn()]
+        cols[0].setHeading("Código")
+        cols[0].setWidth(20)
+        cols[1].setHeading("Regra")
+        cols[1].setWidth(150)
+        cols[2].setHeading("Objeto")
+        cols[2].setWidth(55)
+        cols[3].setHeading("Erros")
+        cols[3].setWidth(20)
+
+        self.createTable(layout, 12, 35 + tabOff, QgsLayoutSize(270, 190),
+                         cols, ereport)
+
+        time = QgsLayoutItemLabel(layout)
+        time.setText(footnote)
+        time.setFont(QFont('Arial', 10, 25))
+        time.adjustSizeToText()
+        time.attemptMove(QgsLayoutPoint(8, 230 + tabOff))
+        layout.addItem(time)
+
+        return tabOff + 220
+
     def getRule(self, rules, code):
         result = None
 
@@ -600,6 +636,33 @@ class ValidationDialog(QDialog, FORM_CLASS):
             except Exception as e:
                 print(e)
                 greport = None
+
+            eq = (
+                "WITH normalized AS ("
+                "    SELECT COALESCE("
+                "        e.rule_code,"
+                "        CASE"
+                "            WHEN e.entidade = 'curva_de_nivel' AND e.motivo = 'Ponto fora da linha da área de trabalho' THEN 're3_1_1'"
+                "            WHEN e.entidade = 'curva_de_nivel' AND e.motivo LIKE 'discrepância no valor de z:%' THEN 're3_1_2'"
+                "            WHEN e.entidade = 'curso_de_agua_eixo' AND e.motivo = 'ponto de inflexão' THEN 're4_5_2'"
+                "        END"
+                "    ) AS rule_code, e.entidade"
+                "    FROM errors.erros_3d e"
+                ") "
+                "SELECT n.rule_code, "
+                "(SELECT r.name FROM validation.rules r WHERE r.code = n.rule_code AND '{}' = ANY(r.versoes) LIMIT 1), "
+                "n.entidade, COUNT(*)::text "
+                "FROM normalized n "
+                "WHERE n.rule_code IS NOT NULL "
+                "GROUP BY n.rule_code, n.entidade "
+                "ORDER BY n.rule_code, n.entidade;"
+            ).format(self.vrs)
+            ereport = None
+            try:
+                ereport = self.pgutils.run_query_with_conn(self.actconn, eq)
+            except Exception as e:
+                print(e)
+                ereport = None
 
             times = datetime.now()
             footnote = times.strftime("%Y-%m-%d %H:%M:%S") +\
@@ -747,6 +810,41 @@ class ValidationDialog(QDialog, FORM_CLASS):
 
                     tabOff = tabOff + 220
 
+                if len(self.constraint_errors) > 0:
+                    npage = QgsLayoutItemPage(layout)
+                    npage.setPageSize('A4', QgsLayoutItemPage.Landscape)
+                    pages.addPage(npage)
+
+                    section = QgsLayoutItemLabel(layout)
+                    section.setText('Erros de Constraints da Base de Dados')
+                    section.setFont(QFont('Arial', 14, 75))
+                    section.adjustSizeToText()
+                    section.attemptMove(QgsLayoutPoint(8, 35 + tabOff))
+                    layout.addItem(section)
+
+                    cols = [QgsLayoutTableColumn(), QgsLayoutTableColumn(),
+                            QgsLayoutTableColumn(), QgsLayoutTableColumn()]
+                    cols[0].setHeading("Tabela")
+                    cols[0].setWidth(60)
+                    cols[1].setHeading("Tipo")
+                    cols[1].setWidth(40)
+                    cols[2].setHeading("Detalhe")
+                    cols[2].setWidth(110)
+                    cols[3].setHeading("Estado")
+                    cols[3].setWidth(30)
+
+                    self.createTable(layout, 12, 35 + tabOff, QgsLayoutSize(270, 190),
+                                    cols, self.constraint_errors)
+
+                    time = QgsLayoutItemLabel(layout)
+                    time.setText(footnote)
+                    time.setFont(QFont('Arial', 10, 25))
+                    time.adjustSizeToText()
+                    time.attemptMove(QgsLayoutPoint(8, 230+tabOff))
+                    layout.addItem(time)
+
+                    tabOff = tabOff + 220
+
                 if len(self.value_list_errors) > 0:
                     npage = QgsLayoutItemPage(layout)
                     npage.setPageSize('A4', QgsLayoutItemPage.Landscape)
@@ -818,6 +916,10 @@ class ValidationDialog(QDialog, FORM_CLASS):
                     tabOff = self.addGeometriasInvalidasReportSection(
                         layout, pages, footnote, tabOff, greport)
 
+                if ereport is not None and len(ereport) > 0:
+                    tabOff = self.addErros3dReportSection(
+                        layout, pages, footnote, tabOff, ereport)
+
                 for thm in sorted(themes):
                     npage = QgsLayoutItemPage(layout)
                     npage.setPageSize('A4', QgsLayoutItemPage.Landscape)
@@ -854,8 +956,14 @@ class ValidationDialog(QDialog, FORM_CLASS):
                     tabOff = tabOff + 220
 
             elif greport is not None and len(greport) > 0:
-                self.addGeometriasInvalidasReportSection(
+                tabOff = self.addGeometriasInvalidasReportSection(
                     layout, pages, footnote, 0, greport)
+                if ereport is not None and len(ereport) > 0:
+                    tabOff = self.addErros3dReportSection(
+                        layout, pages, footnote, tabOff, ereport)
+            elif ereport is not None and len(ereport) > 0:
+                self.addErros3dReportSection(
+                    layout, pages, footnote, 0, ereport)
 
             title = self.lineEdit.text() if self.lineEdit.text() else "report"
 
@@ -913,6 +1021,7 @@ class ValidationDialog(QDialog, FORM_CLASS):
 
         self.structure_errors = self.validateProcess.structure_errors
         self.value_list_errors = self.validateProcess.value_list_errors
+        self.constraint_errors = self.validateProcess.constraint_errors
 
         if not self.validateProcess.cancel is True:
             # conString = qgis_configs.getConnString(self, self.getConnection())
@@ -1358,6 +1467,7 @@ class ValidateProcess(QThread):
         
         self.structure_errors = []
         self.value_list_errors = []
+        self.constraint_errors = []
         
         self.is_sections = is_sections
         self.areaTable = areaTable
@@ -1484,6 +1594,38 @@ class ValidateProcess(QThread):
                 except Exception as e:
                     self.write(
                         "Erro ao validar estrutura base.\n" + str(e))
+
+            constraints_path = os.path.join(
+                os.path.dirname(os.path.realpath(__file__)),
+                'convert', 'constraints', self.vrs + '.json')
+            if os.path.isfile(constraints_path):
+                try:
+                    with open(constraints_path, encoding='utf-8') as constraints_file:
+                        manifest = json.load(constraints_file)
+                    manifest_json = json.dumps(manifest, ensure_ascii=False).replace("'", "''")
+                    res = self.pgutils.run_query_with_conn(
+                        self.actconn,
+                        "select validation.validate_schema_constraints('{}'::jsonb);".format(
+                            manifest_json))
+                    if res and len(res) > 0 and res[0][0]:
+                        errors = res[0][0]
+                        if isinstance(errors, str):
+                            errors = json.loads(errors)
+                        for err in errors:
+                            self.constraint_errors.append([
+                                err.get('tabela', ''),
+                                err.get('tipo', ''),
+                                err.get('detalhe', ''),
+                                err.get('estado', ''),
+                            ])
+                    if len(self.constraint_errors) > 0:
+                        self.write(
+                            "\t[Aviso] {} erro(s) de constraints da base de dados".format(
+                                len(self.constraint_errors)))
+                    else:
+                        self.write("\tConstraints da base de dados validadas")
+                except Exception as e:
+                    self.write("Erro ao validar constraints da base de dados.\n" + str(e))
 
             if interrupt:
                 self.write("[Erro] Estrutura base inválida")
